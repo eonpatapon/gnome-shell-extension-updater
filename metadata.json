@@ -1,0 +1,7 @@
+{
+"shell-version": ["3.2"],
+"uuid": "updater@patapon.info",
+"name": "Extension updater",
+"description": "Check updates for all extensions installed through extensions.gnome.org. This extension can't update itself.",
+"url": "https://github.com/eonpatapon/gnome-shell-extension-updater"
+}
