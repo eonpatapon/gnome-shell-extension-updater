@@ -22,103 +22,314 @@ const MessageTray = imports.ui.messageTray;
 const St = imports.gi.St;
 const Mainloop = imports.mainloop;
 const ExtensionSystem = imports.ui.extensionSystem;
+const FileUtils = imports.misc.fileUtils;
+const Gio = imports.gi.Gio;
 const Gettext = imports.gettext.domain('gnome-shell-extension-updater');
 const _ = Gettext.gettext;
 
-const UPDATE_INTERVAL = 86400; // 24 hours
+const REPOSITORY_URL_UPDATES = ExtensionSystem.REPOSITORY_URL_BASE + '/update-info/';
+const UPDATE_INTERVAL = 432000;
 
 const _httpSession = new Soup.SessionAsync();
+_httpSession.timeout = 10;
 
 if (Soup.Session.prototype.add_feature != null)
     Soup.Session.prototype.add_feature.call(_httpSession, new Soup.ProxyResolverDefault());
 
-// Used to store the extensions that can be updated
-let extensions = {};
-// ExtensionStateChanged signal id
-let stateChangedId = false;
+let extensionsUpdatesManager;
+let settings;
 
-function ExtensionSource() {
+function ExtensionsUpdatesManager() {
     this._init.apply(this, arguments);
 }
 
-ExtensionSource.prototype = {
-    __proto__: MessageTray.Source.prototype,
+ExtensionsUpdatesManager.prototype = {
+    _init: function() {
+        // Monitor extensions state changes
+        this._stateChangedId = ExtensionSystem.connect('extension-state-changed',
+                                                       Lang.bind(this, this.stateChanged));
+        // Our notification source
+        this.source = false;
+        // Internal list of extensions
+        this.list = {};
+        // Extensions to update
+        this.update_list = {};
+        // Number of errors while updating
+        this.errors = 0;
+        // Load extensions that can be updated
+        this.loadList();
+        // Check when to start the update check
+        this.getSettings();
+    },
 
-    _init: function(uuid, version, name, state) {
-        MessageTray.Source.prototype._init.call(this, _("Extension update"));
-        this.uuid = uuid;
-        this.version = version;
-        this.name = name;
-        this.state = state;
-        this._data = false;
-        this._timeoutId = false;
+    getSettings: function() {
+        let next_check = settings.get_int('lastcheck') + UPDATE_INTERVAL;
+        let current_timestamp = Math.round(new Date().getTime() / 1000);
+        if (next_check - current_timestamp > 0) {
+            Mainloop.timeout_add_seconds((next_check - current_timestamp),
+                                         Lang.bind(this, this.checkUpdates));
+        }
+        else 
+            this.checkUpdates();
+    },
+
+    loadList: function() {
+        // Load the list of extensions that can be updated
+        this.list = {};
+        let types;
+        let extensions;
+        if (ExtensionSystem.ExtensionUtils) { // 3.4
+            types = ExtensionSystem.ExtensionUtils.ExtensionType;
+            extensions = ExtensionSystem.ExtensionUtils.extensions;
+        }
+        else { // 3.2
+            types = ExtensionSystem.ExtensionType;
+            extensions = ExtensionSystem.extensionMeta;
+        }
+
+        for (let uuid in extensions) {
+            // Get enabled extensions installed from e.g.o
+            if (uuid != "updater@patapon.info" &&
+                extensions[uuid].type == types.PER_USER &&
+                extensions[uuid].state != ExtensionSystem.ExtensionState.DISABLED &&
+                (extensions[uuid].version || 
+                 (extensions[uuid].metadata && extensions[uuid].metadata.version)
+                )
+               ) {
+                    let version;
+                    let name;
+                    if (extensions[uuid].metadata) { // 3.4
+                        version = extensions[uuid].metadata.version;
+                        name = extensions[uuid].metadata.name;
+                    }
+                    else { // 3.2
+                        version = extensions[uuid].version;
+                        name = extensions[uuid].name;
+                    }
+                    this.list[uuid] = {uuid: uuid,
+                                       version: version,
+                                       name: name,
+                                       state: extensions[uuid].state}
+            }
+        }
     },
 
     checkUpdates: function() {
-        let params = {'uuid': this.uuid, 'shell_version': Config.PACKAGE_VERSION};
-        let message = Soup.form_request_new_from_hash('GET', 
-            ExtensionSystem.REPOSITORY_URL_INFO, params);
+        let installed = {};
+        for (let uuid in this.list) {
+            installed[uuid] = this.list[uuid].version;
+        }
+        let params = {'installed': JSON.stringify(installed),
+                      'shell_version': Config.PACKAGE_VERSION};
 
-        _httpSession.queue_message(message, 
+        let message = Soup.form_request_new_from_hash('GET',
+                                                      REPOSITORY_URL_UPDATES,
+                                                      params);
+
+        _httpSession.queue_message(message,
             Lang.bind(this, function(session, message) {
-                let wait = UPDATE_INTERVAL;
+                this.update_list = {};
 
-                if (message.status_code == 200) {
-                    this._data = JSON.parse(message.response_body.data);
-                    if (this._data && this._data.version > this.version)
-                        this.showNotification();
+                if (message.status_code == Soup.KnownStatusCode.OK) {
+                    let operations = JSON.parse(message.response_body.data);
+                    for (let uuid in operations) {
+                        if (operations[uuid].operation == "upgrade")
+                            this.update_list[uuid] = {
+                                'name': this.list[uuid].name,
+                                'version_tag': operations[uuid].version_tag.toString()
+                            };
+                    }
+                    settings.set_int('lastcheck', Math.round(new Date().getTime() / 1000))
+                    Mainloop.timeout_add_seconds(UPDATE_INTERVAL, Lang.bind(this, this.checkUpdates));
                 }
                 else {
-                    wait = 300; // 5min
+                    // Retry in 5 mins
+                    Mainloop.timeout_add_seconds(300, Lang.bind(this, this.checkUpdates));
                 }
-                
-                this.checkTimeout(wait);
+
+                if (Object.keys(this.update_list).length > 0) {
+                    this.source = new ExtensionsUpdatesSource();
+                    this.source.showUpdates(this.update_list);
+                }
+
             })
         );
-
     },
 
-    checkTimeout: function(time) {
-        this._timeoutId = Mainloop.timeout_add_seconds(time, 
-            Lang.bind(this, this.checkUpdates)
-        );
-    },
-
-    showNotification: function() {
-        if (this.notifications.length == 0) {
-            let notification = new ExtensionUpdateNotification(this,
-                _("Extension update available"),
-                _("Update the extension <b>%s</b> to the lastest version ?").format(this.name)
-            );
-            this._setSummaryIcon(this.createNotificationIcon());
-            Main.messageTray.add(this);
-            this.notify(notification);
+    updateExtensions: function() {
+        for (let uuid in this.update_list) {
+            this.updateExtension(uuid,
+                                 this.list[uuid].name,
+                                 this.update_list[uuid].version_tag);
         }
     },
 
-    updateExtension: function() {
+    updateExtension: function(uuid, name, version_tag) {
+        new ExtensionUpdate(uuid, name, version_tag);
+    },
+
+    stateChanged: function(source, meta) {
+        if (this.list[meta.uuid]) { // Upgrade / Uninstall
+            
+            let uuid = meta.uuid;
+            let name = this.list[uuid].name;
+            let old_state = this.list[uuid].state;
+            let new_state = meta.state;
+            let error = meta.error;
+
+            if (old_state == ExtensionSystem.ExtensionState.ENABLED &&
+                new_state == ExtensionSystem.ExtensionState.DOWNLOADING) {
+                    this.source.showStartUpdates()
+            }
+            if (old_state == ExtensionSystem.ExtensionState.UNINSTALLED &&
+                new_state == ExtensionSystem.ExtensionState.ENABLED) {
+                    this.endUpdateSuccess(uuid, name);
+            }
+            if (old_state == ExtensionSystem.ExtensionState.UNINSTALLED &&
+                new_state == ExtensionSystem.ExtensionState.ERROR) {
+                    this.endUpdateError(uuid, name, error);
+            }
+            // Update to the current state
+            this.list[uuid].state = new_state;
+        }
+        else { // New install
+            // reload the list
+            this.loadList();
+        }
+    },
+
+    endUpdateAll: function() {
+        if (Object.keys(this.update_list).length == 0) {
+            if (this.errors > 0)
+                this.source.showEndUpdatesErrors();
+            else
+                this.source.showEndUpdatesSuccess();
+            this.errors = 0;
+        }
+    },
+
+    endUpdateSuccess: function(uuid, name) {
+        delete this.update_list[uuid];
+        this.source.showUpdateDone(name);
+        this.endUpdateAll();
+    },
+
+    endUpdateError: function(uuid, name, error) {
+        this.errors += 1;
+        this.source.showUpdateError(uuid, name, this.update_list[uuid].version_tag, error);
+        delete this.update_list[uuid];
+        this.endUpdateAll();
+    },
+}
+
+
+function ExtensionUpdate() {
+    this._init.apply(this, arguments);
+}
+
+ExtensionUpdate.prototype = {
+    _init: function(uuid, name, version_tag) {
+        this.uuid = uuid;
+        this.name = name;
+        this.version_tag = version_tag;
+        this.download();
+    },
+
+    download: function() {
+        let state = { uuid: this.uuid,
+                      state: ExtensionSystem.ExtensionState.DOWNLOADING,
+                      error: '' };
+
+        ExtensionSystem._signals.emit('extension-state-changed', state);
+
+        let params = { version_tag: this.version_tag,
+                       shell_version: Config.PACKAGE_VERSION,
+                       api_version: ExtensionSystem.API_VERSION.toString() };
+
+        let url = ExtensionSystem.REPOSITORY_URL_DOWNLOAD.format(this.uuid);
+        this.message = Soup.form_request_new_from_hash('GET', url, params);
+
+        _httpSession.queue_message(this.message,
+                                   Lang.bind(this, this.downloadResponse));
+    },
+
+    downloadResponse: function(session, message) {
+        if (message.status_code == Soup.KnownStatusCode.OK) {
+            this.update(session, message);
+        }
+        else {
+            let state = { uuid: this.uuid,
+                          state: ExtensionSystem.ExtensionState.ERROR,
+                          error: _("Failed to download extension '%s'").format(this.name) };
+            ExtensionSystem._signals.emit('extension-state-changed', state);
+        }
+    },
+
+    update: function(session, message) {
         ExtensionSystem.uninstallExtensionFromUUID(this.uuid);
-        ExtensionSystem.installExtensionFromUUID(this.uuid, 
-            this._data.version_tag.toString());
+        ExtensionSystem.gotExtensionZipFile(session, message, this.uuid);
+    }
+}
+
+function ExtensionsUpdatesSource() {
+    this._init.apply(this, arguments);
+}
+
+ExtensionsUpdatesSource.prototype = {
+    __proto__: MessageTray.Source.prototype,
+
+    _init: function(manager) {
+        MessageTray.Source.prototype._init.call(this, _("Extensions updates"));
+        this.updates_notification = false;
+        this.error_notification = false;
+        this.success_notification = false;
     },
 
-    checkInstall: function(meta) {
-        if (this.state == ExtensionSystem.ExtensionState.DOWNLOADING &&
-            meta.state == ExtensionSystem.ExtensionState.ENABLED) {
-                let notification = new MessageTray.Notification(this, 
-                    _("Extension '%s' updated").format(this.name), null);
-                this.notify(notification);
-        }
+    showUpdates: function(update_list) {
+        let list = "";
+        for (let uuid in update_list)
+            list += "\n- <b>%s</b>".format(update_list[uuid].name)
+        this.updates_notification = new ExtensionsUpdatesNotification(this,
+            _("Extensions updates available"),
+            _("Updates for the following extensions are available:") + list
+        );
+        this.updates_notification.setResident(true);
+        this._setSummaryIcon(this.createNotificationIcon());
+        Main.messageTray.add(this);
+        this.notify(this.updates_notification);
+    },
 
-        if (this.state == ExtensionSystem.ExtensionState.DOWNLOADING &&
-            meta.state == ExtensionSystem.ExtensionState.ERROR) {
-                let notification = new MessageTray.Notification(this, 
-                    _("Error while updating extension '%s'").format(this.name), 
-                    null);
-                this.notify(notification);
-        }
+    showStartUpdates: function() {
+        let params = {clear: true};
+        this.updates_notification.update(_("Updating extensions..."), "", params);
+    },
 
-        this.state = meta.state;
+    showEndUpdatesSuccess: function() {
+        let params = {clear: true};
+        this.updates_notification.setResident(false);
+        this.updates_notification.update(_("Extensions updated"), "", params);
+    },
+
+    showEndUpdatesErrors: function() {
+        let params = {clear: true};
+        this.updates_notification.setResident(false);
+        this.updates_notification.update(_("Failed to update some extensions"), "", params);
+    },
+
+    showUpdateError: function(uuid, name, version_tag, error) {
+        this.error_notification = new ExtensionUpdateErrorNotification(this,
+            uuid, name, version_tag, error
+        );
+        this._setSummaryIcon(this.createNotificationErrorIcon());
+        this.notify(this.error_notification);
+    },
+
+    showUpdateDone: function(name) {
+        this.success_notification = new ExtensionUpdateDoneNotification(this,
+            _("Extension '%s' updated").format(name)
+        );
+        this._setSummaryIcon(this.createNotificationIcon());
+        this.notify(this.success_notification);
     },
 
     createNotificationIcon: function() {
@@ -127,106 +338,127 @@ ExtensionSource.prototype = {
                             icon_type: St.IconType.FULLCOLOR});
     },
 
-    destroy: function() {
-        if (this._timeoutId)
-            Mainloop.source_remove(this._timeoutId);
-        MessageTray.Source.prototype.destroy.call(this);
+    createNotificationErrorIcon: function() {
+        return new St.Icon({icon_name: 'dialog-warning',
+                            icon_size: this.ICON_SIZE,
+                            icon_type: St.IconType.FULLCOLOR});
     }
 }
 
-function ExtensionUpdateNotification() {
+
+function ExtensionsUpdatesNotification() {
     this._init.apply(this, arguments);
 }
 
-ExtensionUpdateNotification.prototype = {
+ExtensionsUpdatesNotification.prototype = {
     __proto__: MessageTray.Notification.prototype,
 
     _init: function(source, title, body) {
-        MessageTray.Notification.prototype._init.call(this, source,
+        this.source = source;
+        MessageTray.Notification.prototype._init.call(this, this.source,
                                                       title, null,
                                                       { customContent: true,
                                                         bodyMarkup: true });
 
         this.addBody(body, true);
-        this.addButton('update', _("Update"));
+        this.addButton('update', _("Update all"));
         this.addButton('ignore', _("Ignore"));
+
+        this.connect('clicked', Lang.bind(this, function() {
+            this.source.destroyNonResidentNotifications();
+        }));
 
         this.connect('action-invoked', Lang.bind(this, function(self, action) {
             switch (action) {
                 case 'update':
-                    log("Updating extension %s".format(source.uuid));
-                    source.updateExtension();
+                    extensionsUpdatesManager.updateExtensions();
                     break;
                 case 'ignore':
-                default:
+                    this.destroy();
             }
-            this.destroy();
+        }));
+    }
+}
+
+function ExtensionUpdateDoneNotification() {
+    this._init.apply(this, arguments);
+}
+
+ExtensionUpdateDoneNotification.prototype = {
+    __proto__: MessageTray.Notification.prototype,
+
+    _init: function(source, title) {
+        this.source = source;
+        MessageTray.Notification.prototype._init.call(this, this.source,
+                                                      title, null, {});
+
+        this.connect('clicked', Lang.bind(this, function() {
+            this.source.destroyNonResidentNotifications();
         }));
     }
 }
 
 
-function getExtensionList() {
-    for (uuid in ExtensionSystem.extensionMeta) {
-        // Get enabled extensions installed from e.g.o
-        if (!extensions[uuid] && uuid != "updater@patapon.info" &&
-            ExtensionSystem.extensionMeta[uuid].type == ExtensionSystem.ExtensionType.PER_USER && 
-            ExtensionSystem.extensionMeta[uuid].state == ExtensionSystem.ExtensionState.ENABLED &&
-            ExtensionSystem.extensionMeta[uuid].version) {
-                let extension = new ExtensionSource(uuid, 
-                    ExtensionSystem.extensionMeta[uuid].version, 
-                    ExtensionSystem.extensionMeta[uuid].name,
-                    ExtensionSystem.extensionMeta[uuid].state);
-                extensions[uuid] = extension;
-        }
-    }
+function ExtensionUpdateErrorNotification() {
+    this._init.apply(this, arguments);
 }
 
-function checkUpdates() {
-    // Check updates immediately
-    for (let uuid in extensions) {
-        extensions[uuid].checkUpdates();
-    }
-}
+ExtensionUpdateErrorNotification.prototype = {
+    __proto__: MessageTray.Notification.prototype,
 
-function extensionStateChanged(source, meta) {
-    if (extensions[meta.uuid]) {
-        // Extension uninstalled
-        if (meta.state == ExtensionSystem.ExtensionState.UNINSTALLED) {
-            extensions[meta.uuid].destroy();
-            delete extensions[meta.uuid];
-        }
-        // Check installation status
-        else
-            extensions[meta.uuid].checkInstall(meta);
-    }
-    // New extension installed
-    else if (meta.state == ExtensionSystem.ExtensionState.ENABLED) {
-        // Add the new extension to the list
-        getExtensionList();
-        // Program the next update check
-        extensions[meta.uuid].checkTimeout(UPDATE_INTERVAL);
+    _init: function(source, uuid, name, version_tag, error) {
+        this.source = source;
+        this.uuid = uuid;
+        this.name = name;
+        this.version_tag = version_tag;
+        MessageTray.Notification.prototype._init.call(this, this.source,
+                                                      error, null, {});
+        
+        this.addButton('retry', _("Retry"));
+        this.addButton('ignore', _("Ignore"));
+
+        this.connect('action-invoked', Lang.bind(this, function(self, action) {
+            switch (action) {
+                case 'retry':
+                    extensionsUpdatesManager.updateExtension(this.uuid, this.name, this.version_tag);
+                    break;
+                case 'ignore':
+                    this.destroy();
+            }
+        }));
+        
+        this.connect('clicked', Lang.bind(this, function() {
+            this.source.destroyNonResidentNotifications();
+        }));
     }
 }
 
 function init(metadata) {
     imports.gettext.bindtextdomain('gnome-shell-extension-updater', metadata.path + '/locale');
+    let schemaName = "org.gnome.shell.extensions.updater";
+    let schemaSource = Gio.SettingsSchemaSource.new_from_directory(metadata.path + '/schema',
+                                    Gio.SettingsSchemaSource.get_default(),
+                                    false);
+    let schema = schemaSource.lookup(schemaName, false);
+    settings = new Gio.Settings({ settings_schema: schema });
 }
 
 function enable() {
     // Wait that all extensions are loaded
-    Mainloop.timeout_add_seconds(10, function() {
-        getExtensionList();
-        checkUpdates();
-        stateChangedId = ExtensionSystem.connect('extension-state-changed', 
-                            extensionStateChanged);
+    Mainloop.timeout_add_seconds(6, function() {
+        // 3.4
+        // Remove ourself from the extensionOrder list so that we won't get
+        // disabled when another extension is disabled
+        if (ExtensionSystem.extensionOrder) {
+            let idx = ExtensionSystem.extensionOrder.indexOf('updater@patapon.info');
+            if (idx != -1) ExtensionSystem.extensionOrder.splice(idx, 1);
+        }
+        extensionsUpdatesManager = new ExtensionsUpdatesManager();
     });
 }
 
 function disable() {
-    for (let uuid in extensions)
-        extensions[uuid].destroy();
-    extensions = {};
-    ExtensionSystem.disconnect(stateChangedId);
-    stateChangedId = false;
+    if (extensionsUpdatesManager._stateChangedId)
+        ExtensionSystem.disconnect(extensionsUpdatesManager._stateChangedId);
+    extensionsUpdatesManager = null;
 }

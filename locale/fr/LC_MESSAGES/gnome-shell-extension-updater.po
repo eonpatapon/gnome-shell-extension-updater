@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: 1.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2012-04-13 15:26+0200\n"
+"POT-Creation-Date: 2012-04-29 21:37+0200\n"
 "PO-Revision-Date: 2012-04-13 15:30+0200\n"
 "Last-Translator: Jean-Philippe Braun <eon@patapon.info>\n"
 "Language-Team: Jean-Philippe Braun <eon@patapon.info>\n"
@@ -17,33 +17,48 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: extension.js:48
-msgid "Extension update"
-msgstr "Extension mise à jour"
-
-#: extension.js:92
-msgid "Extension update available"
-msgstr "Mise à jour disponible"
-
-#: extension.js:93
-#, python-format
-msgid "Update the extension <b>%s</b> to the lastest version ?"
-msgstr "Mettre à jour l'extension <b>%s</b> à la dernière version ?"
-
-#: extension.js:111
+#: extension.js:336
 #, python-format
 msgid "Extension '%s' updated"
-msgstr "L'extension '%s' a été mise à jour"
+msgstr "Extension '%s' à jour"
 
-#: extension.js:118
+#: extension.js:317
+msgid "Extensions updated"
+msgstr "Extensions à jour"
+
+#: extension.js:289
+msgid "Extensions updates"
+msgstr "Mises à jour d'extensions"
+
+#: extension.js:300
+msgid "Extensions updates available"
+msgstr "Mises à jour d'extensions disponibles"
+
+#: extension.js:270
 #, python-format
-msgid "Error while updating extension '%s'"
-msgstr "Erreur pendant la mise à jour de l'extension '%s'"
+msgid "Failed to download extension '%s'"
+msgstr "Échec du téléchargement de l'extension '%s'"
 
-#: extension.js:153
-msgid "Update"
-msgstr "Mettre à jour"
+#: extension.js:323
+msgid "Failed to update some extensions"
+msgstr "Impossible de mettre à jour certaines extensions"
 
-#: extension.js:154
+#: extension.js:372 extension.js:425
 msgid "Ignore"
 msgstr "Ignorer"
+
+#: extension.js:424
+msgid "Retry"
+msgstr "Réessayer"
+
+#: extension.js:371
+msgid "Update all"
+msgstr "Tout mettre à jour"
+
+#: extension.js:301
+msgid "Updates for the following extensions are available:"
+msgstr "Les mises à jour d'extensions suivantes sont disponibles :"
+
+#: extension.js:311
+msgid "Updating extensions..."
+msgstr "Mise à jour des extensions..."

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="gnome-shell-extension-updater">
+  <schema path="/org/gnome/shell/extensions/updater/" id="org.gnome.shell.extensions.updater">
+    <key type="i" name="lastcheck">
+        <default>0</default>
+        <summary>Unix timestamp of the lastest check</summary>
+    </key>
+  </schema>
+</schemalist>
