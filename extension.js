@@ -29,6 +29,7 @@ const _ = Gettext.gettext;
 
 const REPOSITORY_URL_UPDATES = ExtensionSystem.REPOSITORY_URL_BASE + '/update-info/';
 const UPDATE_INTERVAL = 432000;
+const DEBUG = false;
 
 const _httpSession = new Soup.SessionAsync();
 _httpSession.timeout = 10;
@@ -117,6 +118,8 @@ ExtensionsUpdatesManager.prototype = {
     checkUpdates: function() {
         let installed = {};
         for (let uuid in this.list) {
+            if (DEBUG)
+                this.list[uuid].version = 1;
             installed[uuid] = this.list[uuid].version;
         }
         let params = {'installed': JSON.stringify(installed),
@@ -125,6 +128,8 @@ ExtensionsUpdatesManager.prototype = {
         let message = Soup.form_request_new_from_hash('GET',
                                                       REPOSITORY_URL_UPDATES,
                                                       params);
+        _log("Checking for updates.");
+        _log(JSON.stringify(params));
 
         _httpSession.queue_message(message,
             Lang.bind(this, function(session, message) {
@@ -146,6 +151,8 @@ ExtensionsUpdatesManager.prototype = {
                     // Retry in 5 mins
                     Mainloop.timeout_add_seconds(300, Lang.bind(this, this.checkUpdates));
                 }
+
+                _log("Updates: %s".format(JSON.stringify(this.update_list)));
 
                 if (Object.keys(this.update_list).length > 0) {
                     this.source = new ExtensionsUpdatesSource();
@@ -177,6 +184,8 @@ ExtensionsUpdatesManager.prototype = {
             let new_state = meta.state;
             let error = meta.error;
 
+            _log("State of %s changed from %s to %s".format(uuid, old_state, new_state))
+
             if (old_state == ExtensionSystem.ExtensionState.ENABLED &&
                 new_state == ExtensionSystem.ExtensionState.DOWNLOADING) {
                     this.source.showStartUpdates()
@@ -185,7 +194,7 @@ ExtensionsUpdatesManager.prototype = {
                 new_state == ExtensionSystem.ExtensionState.ENABLED) {
                     this.endUpdateSuccess(uuid, name);
             }
-            if (old_state == ExtensionSystem.ExtensionState.UNINSTALLED &&
+            if (old_state == ExtensionSystem.ExtensionState.DOWNLOADING &&
                 new_state == ExtensionSystem.ExtensionState.ERROR) {
                     this.endUpdateError(uuid, name, error);
             }
@@ -209,12 +218,14 @@ ExtensionsUpdatesManager.prototype = {
     },
 
     endUpdateSuccess: function(uuid, name) {
+        _log("%s updated".format(uuid));
         delete this.update_list[uuid];
         this.source.showUpdateDone(name);
         this.endUpdateAll();
     },
 
     endUpdateError: function(uuid, name, error) {
+        _log("%s error : %s".format(uuid, error));
         this.errors += 1;
         this.source.showUpdateError(uuid, name, this.update_list[uuid].version_tag, error);
         delete this.update_list[uuid];
@@ -254,19 +265,24 @@ ExtensionUpdate.prototype = {
     },
 
     downloadResponse: function(session, message) {
+        _log("Status code %s".format(message.status_code));
         if (message.status_code == Soup.KnownStatusCode.OK) {
+            _log("OK update %s".format(this.uuid));
             this.update(session, message);
         }
         else {
             let state = { uuid: this.uuid,
                           state: ExtensionSystem.ExtensionState.ERROR,
                           error: _("Failed to download extension '%s'").format(this.name) };
+            _log("Error: %s".format(JSON.stringify(state)));
             ExtensionSystem._signals.emit('extension-state-changed', state);
         }
     },
 
     update: function(session, message) {
+        _log("Uninstall %s".format(this.uuid));
         ExtensionSystem.uninstallExtensionFromUUID(this.uuid);
+        _log("Extract new version of %s".format(this.uuid));
         ExtensionSystem.gotExtensionZipFile(session, message, this.uuid);
     }
 }
@@ -312,7 +328,7 @@ ExtensionsUpdatesSource.prototype = {
 
     showEndUpdatesErrors: function() {
         let params = {clear: true};
-        this.updates_notification.setResident(false);
+        this.updates_notification.setResident(true);
         this.updates_notification.update(_("Failed to update some extensions"), "", params);
     },
 
@@ -321,6 +337,7 @@ ExtensionsUpdatesSource.prototype = {
             uuid, name, version_tag, error
         );
         this._setSummaryIcon(this.createNotificationErrorIcon());
+        this.error_notification.setResident(true);
         this.notify(this.error_notification);
     },
 
@@ -421,6 +438,7 @@ ExtensionUpdateErrorNotification.prototype = {
             switch (action) {
                 case 'retry':
                     extensionsUpdatesManager.updateExtension(this.uuid, this.name, this.version_tag);
+                    this.destroy();
                     break;
                 case 'ignore':
                     this.destroy();
@@ -461,4 +479,9 @@ function disable() {
     if (extensionsUpdatesManager._stateChangedId)
         ExtensionSystem.disconnect(extensionsUpdatesManager._stateChangedId);
     extensionsUpdatesManager = null;
+}
+
+function _log(msg) {
+    if (DEBUG)
+        log(msg)
 }
