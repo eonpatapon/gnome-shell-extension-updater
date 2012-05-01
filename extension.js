@@ -164,6 +164,7 @@ ExtensionsUpdatesManager.prototype = {
     },
 
     updateExtensions: function() {
+        this.errors = 0;
         for (let uuid in this.update_list) {
             this.updateExtension(uuid,
                                  this.list[uuid].name,
@@ -186,7 +187,8 @@ ExtensionsUpdatesManager.prototype = {
 
             _log("State of %s changed from %s to %s".format(uuid, old_state, new_state))
 
-            if (old_state == ExtensionSystem.ExtensionState.ENABLED &&
+            if ((old_state == ExtensionSystem.ExtensionState.ENABLED ||
+                 old_state == ExtensionSystem.ExtensionState.ERROR) &&
                 new_state == ExtensionSystem.ExtensionState.DOWNLOADING) {
                     this.source.showStartUpdates()
             }
@@ -208,12 +210,13 @@ ExtensionsUpdatesManager.prototype = {
     },
 
     endUpdateAll: function() {
-        if (Object.keys(this.update_list).length == 0) {
+        if (Object.keys(this.update_list).length == this.errors) {
             if (this.errors > 0)
                 this.source.showEndUpdatesErrors();
             else
                 this.source.showEndUpdatesSuccess();
-            this.errors = 0;
+            // Update done, refresh our extension list
+            this.loadList();
         }
     },
 
@@ -227,8 +230,7 @@ ExtensionsUpdatesManager.prototype = {
     endUpdateError: function(uuid, name, error) {
         _log("%s error : %s".format(uuid, error));
         this.errors += 1;
-        this.source.showUpdateError(uuid, name, this.update_list[uuid].version_tag, error);
-        delete this.update_list[uuid];
+        this.source.showUpdateError(error);
         this.endUpdateAll();
     },
 }
@@ -299,6 +301,7 @@ ExtensionsUpdatesSource.prototype = {
         this.updates_notification = false;
         this.error_notification = false;
         this.success_notification = false;
+        this._setSummaryIcon(this.createNotificationIcon());
     },
 
     showUpdates: function(update_list) {
@@ -310,34 +313,37 @@ ExtensionsUpdatesSource.prototype = {
             _("Updates for the following extensions are available:") + list
         );
         this.updates_notification.setResident(true);
-        this._setSummaryIcon(this.createNotificationIcon());
         Main.messageTray.add(this);
         this.notify(this.updates_notification);
     },
 
     showStartUpdates: function() {
+        this._setSummaryIcon(this.createNotificationIcon());
         let params = {clear: true};
         this.updates_notification.update(_("Updating extensions..."), "", params);
     },
 
     showEndUpdatesSuccess: function() {
+        this._setSummaryIcon(this.createNotificationIcon());
         let params = {clear: true};
         this.updates_notification.setResident(false);
         this.updates_notification.update(_("Extensions updated"), "", params);
     },
 
     showEndUpdatesErrors: function() {
-        let params = {clear: true};
+        this._setSummaryIcon(this.createNotificationErrorIcon());
+        let params = {clear: true, icon: this.createNotificationErrorIcon()};
         this.updates_notification.setResident(true);
         this.updates_notification.update(_("Failed to update some extensions"), "", params);
+        this.updates_notification.addButton('update', _('Retry'));
+        this.updates_notification.addButton('ignore', _('Ignore'));
     },
 
-    showUpdateError: function(uuid, name, version_tag, error) {
-        this.error_notification = new ExtensionUpdateErrorNotification(this,
-            uuid, name, version_tag, error
-        );
+    showUpdateError: function(error) {
         this._setSummaryIcon(this.createNotificationErrorIcon());
-        this.error_notification.setResident(true);
+        this.error_notification = new ExtensionUpdateDoneNotification(this,
+            error
+        );
         this.notify(this.error_notification);
     },
 
@@ -345,7 +351,7 @@ ExtensionsUpdatesSource.prototype = {
         this.success_notification = new ExtensionUpdateDoneNotification(this,
             _("Extension '%s' updated").format(name)
         );
-        this._setSummaryIcon(this.createNotificationIcon());
+        this.success_notification.setTransient(true);
         this.notify(this.success_notification);
     },
 
@@ -388,6 +394,7 @@ ExtensionsUpdatesNotification.prototype = {
         this.connect('action-invoked', Lang.bind(this, function(self, action) {
             switch (action) {
                 case 'update':
+                    this.source.destroyNonResidentNotifications();
                     extensionsUpdatesManager.updateExtensions();
                     break;
                 case 'ignore':
@@ -415,41 +422,6 @@ ExtensionUpdateDoneNotification.prototype = {
     }
 }
 
-
-function ExtensionUpdateErrorNotification() {
-    this._init.apply(this, arguments);
-}
-
-ExtensionUpdateErrorNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
-
-    _init: function(source, uuid, name, version_tag, error) {
-        this.source = source;
-        this.uuid = uuid;
-        this.name = name;
-        this.version_tag = version_tag;
-        MessageTray.Notification.prototype._init.call(this, this.source,
-                                                      error, null, {});
-        
-        this.addButton('retry', _("Retry"));
-        this.addButton('ignore', _("Ignore"));
-
-        this.connect('action-invoked', Lang.bind(this, function(self, action) {
-            switch (action) {
-                case 'retry':
-                    extensionsUpdatesManager.updateExtension(this.uuid, this.name, this.version_tag);
-                    this.destroy();
-                    break;
-                case 'ignore':
-                    this.destroy();
-            }
-        }));
-        
-        this.connect('clicked', Lang.bind(this, function() {
-            this.source.destroyNonResidentNotifications();
-        }));
-    }
-}
 
 function init(metadata) {
     imports.gettext.bindtextdomain('gnome-shell-extension-updater', metadata.path + '/locale');
