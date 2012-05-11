@@ -15,8 +15,19 @@ This extension supports gnome-shell 3.2 and 3.4
 
 # Installation
 
-    git clone git://github.com/eonpatapon/gnome-shell-extension-updater.git
-    cd gnome-shell-extension-updater
-    ./install.sh
+Prerequisites: automake, gnome-common, gettext, glib2 devel files
+
+## System wide (*for gnome-shell 3.2 and 3.4*)
+
+    ./autogen.sh
+    make
+    sudo make install
+
+## In your .local directory (*only for gnome-shell 3.4*)
+
+    ./autogen.sh
+    make
+    make install-zip
+
 
 Restart the shell and then enable the extension.
