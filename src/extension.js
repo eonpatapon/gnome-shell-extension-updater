@@ -24,6 +24,7 @@ const Mainloop = imports.mainloop;
 const ExtensionSystem = imports.ui.extensionSystem;
 const FileUtils = imports.misc.fileUtils;
 const Gio = imports.gi.Gio;
+const GLib = imports.gi.GLib;
 const Gettext = imports.gettext.domain('gnome-shell-extension-updater');
 const _ = Gettext.gettext;
 
@@ -424,13 +425,12 @@ ExtensionUpdateDoneNotification.prototype = {
 
 
 function init(metadata) {
-    imports.gettext.bindtextdomain('gnome-shell-extension-updater', metadata.path + '/locale');
-    let schemaName = "org.gnome.shell.extensions.updater";
-    let schemaSource = Gio.SettingsSchemaSource.new_from_directory(metadata.path + '/schema',
-                                    Gio.SettingsSchemaSource.get_default(),
-                                    false);
-    let schema = schemaSource.lookup(schemaName, false);
-    settings = new Gio.Settings({ settings_schema: schema });
+    if (metadata.metadata) // 3.4
+        metadata['locale'] = metadata.metadata.locale
+    log(metadata.locale);
+    log(metadata.path);
+    initTranslations(metadata);
+    settings = getSettings(metadata);
 }
 
 function enable() {
@@ -456,4 +456,36 @@ function disable() {
 function _log(msg) {
     if (DEBUG)
         log(msg)
+}
+
+function getSettings(metadata) {
+    let schemaName = 'org.gnome.shell.extensions.updater';
+    let schemaDir = metadata.path + '/schemas';
+
+    // Extension installed in .local
+    if (GLib.file_test(schemaDir + '/gschemas.compiled', GLib.FileTest.EXISTS)) {
+        let schemaSource = Gio.SettingsSchemaSource.new_from_directory(schemaDir,
+                                  Gio.SettingsSchemaSource.get_default(),
+                                  false);
+        let schema = schemaSource.lookup(schemaName, false);
+
+        return new Gio.Settings({ settings_schema: schema });
+    }
+    // Extension installed system-wide
+    else {
+        if (Gio.Settings.list_schemas().indexOf(schemaName) == -1)
+            throw "Schema \"%s\" not found.".format(schemaName);
+        return new Gio.Settings({ schema: schemaName });
+    }
+}
+
+function initTranslations(metadata) {
+    // Extension installed in .local
+    if (GLib.file_test(metadata.path + '/locale', GLib.FileTest.EXISTS)) {
+        imports.gettext.bindtextdomain('gnome-shell-extension-updater', metadata.path + '/locale');
+    }
+    // Extension installed system-wide
+    else {
+        imports.gettext.bindtextdomain('gnome-shell-extension-updater', metadata.locale);
+    }
 }
