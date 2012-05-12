@@ -7,11 +7,11 @@ This extension supports gnome-shell 3.2 and 3.4
 
 # Screenshots
 
-![Screenshot](https://github.com/eonpatapon/gnome-shell-extension-updater/raw/master/screenshot.png)
+![Screenshot](https://github.com/eonpatapon/gnome-shell-extension-updater/raw/master/data/screenshot.png)
 
-![Screenshot](https://github.com/eonpatapon/gnome-shell-extension-updater/raw/master/screenshot1.png)
+![Screenshot](https://github.com/eonpatapon/gnome-shell-extension-updater/raw/master/data/screenshot1.png)
 
-![Screenshot](https://github.com/eonpatapon/gnome-shell-extension-updater/raw/master/screenshot2.png)
+![Screenshot](https://github.com/eonpatapon/gnome-shell-extension-updater/raw/master/data/screenshot2.png)
 
 # Installation
 
