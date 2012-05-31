@@ -427,8 +427,6 @@ ExtensionUpdateDoneNotification.prototype = {
 function init(metadata) {
     if (metadata.metadata) // 3.4
         metadata['locale'] = metadata.metadata.locale
-    log(metadata.locale);
-    log(metadata.path);
     initTranslations(metadata);
     settings = getSettings(metadata);
 }
