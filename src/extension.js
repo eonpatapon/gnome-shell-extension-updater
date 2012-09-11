@@ -71,7 +71,7 @@ ExtensionsUpdatesManager.prototype = {
             Mainloop.timeout_add_seconds((next_check - current_timestamp),
                                          Lang.bind(this, this.checkUpdates));
         }
-        else 
+        else
             this.checkUpdates();
     },
 
@@ -94,7 +94,7 @@ ExtensionsUpdatesManager.prototype = {
             if (uuid != "updater@patapon.info" &&
                 extensions[uuid].type == types.PER_USER &&
                 extensions[uuid].state != ExtensionSystem.ExtensionState.DISABLED &&
-                (extensions[uuid].version || 
+                (extensions[uuid].version ||
                  (extensions[uuid].metadata && extensions[uuid].metadata.version)
                 )
                ) {
@@ -121,7 +121,7 @@ ExtensionsUpdatesManager.prototype = {
         for (let uuid in this.list) {
             if (DEBUG)
                 this.list[uuid].version = 1;
-            installed[uuid] = this.list[uuid].version;
+            installed[uuid] = this.list[uuid];
         }
         let params = {'installed': JSON.stringify(installed),
                       'shell_version': Config.PACKAGE_VERSION};
@@ -136,13 +136,13 @@ ExtensionsUpdatesManager.prototype = {
             Lang.bind(this, function(session, message) {
                 this.update_list = {};
 
+
                 if (message.status_code == Soup.KnownStatusCode.OK) {
                     let operations = JSON.parse(message.response_body.data);
                     for (let uuid in operations) {
-                        if (operations[uuid].operation == "upgrade")
+                        if (operations[uuid] == "upgrade")
                             this.update_list[uuid] = {
                                 'name': this.list[uuid].name,
-                                'version_tag': operations[uuid].version_tag.toString()
                             };
                     }
                     settings.set_int('lastcheck', Math.round(new Date().getTime() / 1000))
@@ -167,19 +167,19 @@ ExtensionsUpdatesManager.prototype = {
     updateExtensions: function() {
         this.errors = 0;
         for (let uuid in this.update_list) {
-            this.updateExtension(uuid,
-                                 this.list[uuid].name,
-                                 this.update_list[uuid].version_tag);
+            if (this.list[uuid])
+                this.updateExtension(uuid,
+                                     this.list[uuid].name);
         }
     },
 
-    updateExtension: function(uuid, name, version_tag) {
-        new ExtensionUpdate(uuid, name, version_tag);
+    updateExtension: function(uuid, name) {
+        new ExtensionUpdate(uuid, name);
     },
 
     stateChanged: function(source, meta) {
         if (this.list[meta.uuid]) { // Upgrade / Uninstall
-            
+
             let uuid = meta.uuid;
             let name = this.list[uuid].name;
             let old_state = this.list[uuid].state;
@@ -242,23 +242,21 @@ function ExtensionUpdate() {
 }
 
 ExtensionUpdate.prototype = {
-    _init: function(uuid, name, version_tag) {
+    _init: function(uuid, name) {
         this.uuid = uuid;
         this.name = name;
-        this.version_tag = version_tag;
         this.download();
     },
 
     download: function() {
+
         let state = { uuid: this.uuid,
                       state: ExtensionSystem.ExtensionState.DOWNLOADING,
                       error: '' };
 
         ExtensionSystem._signals.emit('extension-state-changed', state);
 
-        let params = { version_tag: this.version_tag,
-                       shell_version: Config.PACKAGE_VERSION,
-                       api_version: ExtensionSystem.API_VERSION.toString() };
+        let params = { shell_version: Config.PACKAGE_VERSION };
 
         let url = ExtensionSystem.REPOSITORY_URL_DOWNLOAD.format(this.uuid);
         this.message = Soup.form_request_new_from_hash('GET', url, params);
